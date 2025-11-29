@@ -213,6 +213,20 @@ def embed_query(query: str) -> list:
     """Convert a user query into a dense vector representation."""
     return _vectorizer.embed(query)
 
+def user_query_caching(hf):
+    from redisvl.extensions.cache.llm import SemanticCache
+
+    llmcache = SemanticCache(
+        name="llmcache",                
+        vectorizer=hf,                  
+        redis_url=REDIS_URL,          
+        ttl=600,                         
+        distance_threshold=0.45,        
+        overwrite=True      
+    )
+
+    print("Cache created successfully:", llmcache)
+    return llmcache
 
 async def retrieve_context(async_index, query_vector) -> str:
     """Fetch the relevant context from Redis using vector search."""
@@ -275,11 +289,22 @@ async def generate_llm_response(query: str, context: str) -> str:
     return response.content[0].text
 
 
-async def answer_question(index, query: str) -> str:
+async def answer_question(index, query: str , cache) -> str:
     """End-to-end RAG: embeds query, retrieves context, generates LLM response."""
     query_vector = embed_query(query)
+    
+    results = cache.check(vector=query_vector)
+    
+    if results:
+        print("found similar, semantic")
+        return results[0]['response']
+
     context = await retrieve_context(index, query_vector)
-    return await generate_llm_response(query, context)
+
+    
+    llmResults = await generate_llm_response(query, context)
+    cache.store(query, llmResults, query_vector)
+    return llmResults
 
 
 # =============================================================================
@@ -303,6 +328,8 @@ def initialize(doc_path: str = DOC_PATH):
 
     # 3. Create vectorizer
     _vectorizer = create_vectorizer()
+    
+    llmCache = user_query_caching(_vectorizer)
 
     # 4. Embed chunks
     embeddings = embed_chunks(_vectorizer, chunks)
@@ -315,7 +342,7 @@ def initialize(doc_path: str = DOC_PATH):
     print("✓ RAG System Ready!")
     print("=" * 50 + "\n")
 
-    return async_index
+    return async_index,llmCache
 
 
 def ensure_api_key():
@@ -325,10 +352,10 @@ def ensure_api_key():
     print(f"Using model: {CHAT_MODEL}")
 
 
-async def run_test_questions(async_index, questions: list):
+async def run_test_questions(async_index, questions: list , cache):
     """Run test questions through the RAG system."""
     results = await asyncio.gather(*[
-        answer_question(async_index, q) for q in questions
+        answer_question(async_index, q , cache) for q in questions
     ])
 
     for i, result in enumerate(results):
@@ -349,11 +376,11 @@ def main():
     #ensure_api_key()
 
     # Initialize (lazy loading happens here)
-    async_index = initialize()
+    async_index,llmCache = initialize()
     
     # Test
-    questions = ["what tech stacks are used in the project"  , "What is this document about?"]
-    asyncio.run(run_test_questions(async_index, questions))
+    questions = ["In this project, list technologies utilized"]
+    asyncio.run(run_test_questions(async_index, questions , llmCache))
 
 
 
