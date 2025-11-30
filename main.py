@@ -353,11 +353,13 @@ async def generate_llm_response(query: str, context: str) -> str:
 
 
 
-async def answer_question(index, query: str , cache) -> str:
+async def answer_question(index, query: str , cache, use_cache=True, use_llm=True) -> str:
     """End-to-end RAG: embeds query, retrieves context, generates LLM response."""
     query_vector = embed_query(query)
+    results = []
     
-    results = cache.check(vector=query_vector)
+    if use_cache :
+        results = cache.check(vector=query_vector)
     
     if results:
         print("found similar, semantic")
@@ -365,7 +367,8 @@ async def answer_question(index, query: str , cache) -> str:
 
     context = await retrieve_context(index, query_vector)
 
-    
+    if not use_llm : 
+        return context
     llmResults = await generate_llm_response(query, context)
     cache.store(query, llmResults, query_vector)
     return llmResults

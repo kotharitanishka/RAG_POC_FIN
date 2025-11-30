@@ -1,5 +1,5 @@
 """
-FastAPI application for RAG (Retrieval-Augmented Generation) system
+FastAPI application for RAG (Retrieval-Augmented Generation) system using ChromaDB
 Provides endpoints to load PDFs and query documents
 """
 
@@ -11,46 +11,42 @@ import os
 import tempfile
 import shutil
 from pathlib import Path
+import asyncio
 
-# Import functions from main.py
-import main
+# Import functions from main_chroma.py
+import main_chroma
+from main_chroma import (
+    get_chroma_connection_and_collection,
+    load_data,
+    retrieve_context
+)
+
+# Import functions from main.py (for document loading and LLM)
 from main import (
-    initialize,
-    answer_question,
-    get_redis_connection,
-    create_vectorizer,
     load_and_split_document,
-    split_text,
-    embed_chunks,
-    create_async_index,
-    load_data_to_index,
-    user_query_caching,
-    SCHEMA,
-    INDEX_NAME
+    generate_llm_response,
+    split_text
 )
 
 # Import audio processing function
 from audio_process import load_audio_and_transcribe
 
 app = FastAPI(
-    title="RAG POC API",
-    description="API for loading PDFs and querying documents using RAG",
+    title="RAG POC API (ChromaDB)",
+    description="API for loading PDFs and querying documents using RAG with ChromaDB",
     version="1.0.0"
 )
 
 # Global state to store initialized components
 _global_state = {
-    "async_index": None,
-    "vectorizer": None,
-    "cache": None,
+    "chroma_client": None,
+    "collection": None,
     "initialized": False
 }
 
 
 class QueryRequest(BaseModel):
     query: str
-    use_cache : bool = True
-    use_llm : bool = True
 
 
 class QueryResponse(BaseModel):
@@ -61,28 +57,31 @@ class QueryResponse(BaseModel):
 class LoadDocumentResponse(BaseModel):
     message: str
     status: str
+    file_type: Optional[str] = None
     chunks_loaded: Optional[int] = None
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize Redis connection on startup."""
+    """Initialize ChromaDB connection on startup."""
     try:
-        get_redis_connection()
-        print("✓ Redis connection verified on startup")
+        chroma_client, collection = get_chroma_connection_and_collection()
+        _global_state["chroma_client"] = chroma_client
+        _global_state["collection"] = collection
+        print("✓ ChromaDB connection verified on startup")
     except Exception as e:
-        print(f"⚠ Warning: Redis connection failed on startup: {e}")
-        print("⚠ Make sure Redis is running before loading PDFs")
+        print(f"⚠ Warning: ChromaDB connection failed on startup: {e}")
+        print("⚠ Make sure ChromaDB credentials are configured before loading files")
 
 
 @app.get("/")
 async def root():
     """Root endpoint."""
     return {
-        "message": "RAG POC API",
+        "message": "RAG POC API (ChromaDB)",
         "endpoints": {
-            "load_document": "/load-pdf (supports PDF and audio files)",
-            "query": "/query",
+            "load_file": "/load-file (supports PDF and audio files)",
+            "query_data": "/query-data",
             "health": "/health"
         }
     }
@@ -91,31 +90,29 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    redis_status = "disconnected"
+    chroma_status = "disconnected"
     try:
-        get_redis_connection()
-        redis_status = "connected"
+        if _global_state["chroma_client"]:
+            _global_state["chroma_client"].heartbeat()
+            chroma_status = "connected"
     except Exception as e:
-        redis_status = f"error: {str(e)}"
+        chroma_status = f"error: {str(e)}"
     
     return {
-        "status": "healthy" if redis_status == "connected" else "degraded",
-        "redis": redis_status,
+        "status": "healthy" if chroma_status == "connected" else "degraded",
+        "chromadb": chroma_status,
         "rag_initialized": _global_state["initialized"]
     }
 
 
 def _load_and_split_audio(audio_file_path: str, chunk_size: int = 1000, chunk_overlap: int = 200):
     """Load audio file, transcribe it, and split into chunks."""
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from langchain_core.documents import Document
-    
     # Transcribe audio to text
     print("Transcribing audio file...")
     transcribed_text = load_audio_and_transcribe(audio_file_path)
     chunks = split_text(transcribed_text)
     return chunks
-    
+
 
 @app.post("/load-file", response_model=LoadDocumentResponse)
 async def load_file(file: UploadFile = File(...)):
@@ -125,6 +122,18 @@ async def load_file(file: UploadFile = File(...)):
     - **file**: PDF or audio file (supports: .pdf, .mp3, .wav, .m4a, .flac, .ogg) to upload and process
     - Returns: Status message, file type, and number of chunks loaded
     """
+    # Ensure ChromaDB is connected
+    if not _global_state["collection"]:
+        try:
+            chroma_client, collection = get_chroma_connection_and_collection()
+            _global_state["chroma_client"] = chroma_client
+            _global_state["collection"] = collection
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"ChromaDB connection failed: {str(e)}"
+            )
+    
     # Supported file extensions
     pdf_extensions = ['.pdf']
     audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.wma', '.aac']
@@ -169,23 +178,10 @@ async def load_file(file: UploadFile = File(...)):
                 detail="Unsupported file type"
             )
         
-        # Create vectorizer if not exists
-        if _global_state["vectorizer"] is None:
-            _global_state["vectorizer"] = create_vectorizer()
-            # Set global vectorizer in main.py for embed_query function
-            main._vectorizer = _global_state["vectorizer"]
-            _global_state["cache"] = user_query_caching(_global_state["vectorizer"])
-        
-        # Embed chunks
-        embeddings = embed_chunks(_global_state["vectorizer"], chunks)
-        
-        # Create or recreate index
-        async_index = create_async_index(SCHEMA)
-        keys = load_data_to_index(async_index, chunks, embeddings)
-        #load_data_to_chroma(chunks,filepath)
+        # Load data to ChromaDB
+        load_data(temp_file_path, chunks, _global_state["collection"])
         
         # Update global state
-        _global_state["async_index"] = async_index
         _global_state["initialized"] = True
         
         print(f"{'='*50}")
@@ -196,7 +192,7 @@ async def load_file(file: UploadFile = File(...)):
             message=f"{file_type} file '{file.filename}' loaded successfully",
             status="success",
             file_type=file_type.lower(),
-            chunks_loaded=len(keys)
+            chunks_loaded=len(chunks)
         )
     
     except HTTPException:
@@ -216,7 +212,7 @@ async def load_file(file: UploadFile = File(...)):
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query_documents(request: QueryRequest):
+async def query_data(request: QueryRequest):
     """
     Query the loaded documents using RAG.
     
@@ -226,7 +222,13 @@ async def query_documents(request: QueryRequest):
     if not _global_state["initialized"]:
         raise HTTPException(
             status_code=400,
-            detail="No document loaded. Please load a PDF or audio file first using /load-pdf endpoint."
+            detail="No document loaded. Please load a PDF or audio file first using /load-file endpoint."
+        )
+    
+    if not _global_state["collection"]:
+        raise HTTPException(
+            status_code=500,
+            detail="ChromaDB collection not available. Please check connection."
         )
     
     if not request.query or not request.query.strip():
@@ -236,14 +238,11 @@ async def query_documents(request: QueryRequest):
         )
     
     try:
-        # Get answer using RAG
-        answer = await answer_question(
-            _global_state["async_index"],
-            request.query,
-            _global_state["cache"], 
-            request.use_cache,
-            request.use_llm
-        )
+        # Retrieve context from ChromaDB
+        context = retrieve_context(request.query, _global_state["collection"])
+        
+        # Generate LLM response using the retrieved context
+        answer = await generate_llm_response(request.query, context)
         
         return QueryResponse(
             answer=answer,
@@ -259,4 +258,5 @@ async def query_documents(request: QueryRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
+

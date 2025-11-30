@@ -2,9 +2,6 @@ import chromadb
 import os
 from dotenv import load_dotenv
 from chromadb import Collection
-import faiss
-import datetime
-import asyncio
 
 
 load_dotenv()
@@ -38,7 +35,7 @@ def get_chroma_connection_and_collection():
         raise
 
 
-def load_data(file_path : str, chunks :list[str]): 
+def load_data(file_path : str, chunks :list[str], collection : Collection): 
     # Generate required lists
     ids = []
     doc_content = []
@@ -69,7 +66,7 @@ def load_data(file_path : str, chunks :list[str]):
     print(f"Successfully added {len(chunks)} chunks from {file_name}.")
 
 
-def retrieve_context(query:str) : 
+def retrieve_context(query:str, collection : Collection) : 
     # Run the query
     results = collection.query(
         query_texts=[query],
@@ -86,14 +83,3 @@ def retrieve_context(query:str) :
 
     return "\n\n".join(formatted_context_list)
 
-
-chroma_client, collection = get_chroma_connection_and_collection()
-# filepath = "resources/Questionnaire_for_Improving_Liquidity_in_Bond_Market.pdf"
-# chunks = load_and_split_document(filepath)
-# load_data(filepath, chunks)
-# query = "what are the technologies used"
-# results = retrieve_context(query)
-# print(datetime.datetime.now())
-# llmResults = asyncio.run(generate_llm_response(query, results)) 
-# print(datetime.datetime.now())
-# print(llmResults)
