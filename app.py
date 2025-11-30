@@ -180,6 +180,7 @@ async def load_file(file: UploadFile = File(...)):
         # Create or recreate index
         async_index = create_async_index(SCHEMA)
         keys = load_data_to_index(async_index, chunks, embeddings)
+        #load_data_to_chroma(chunks,filepath)
         
         # Update global state
         _global_state["async_index"] = async_index

@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 api_key = os.getenv("CLAUDE_API_KEY")
+gemini_api_key = os.getenv("GEMINI_API_KEY")
 
 # Only lightweight imports at startup
 warnings.filterwarnings("ignore")
@@ -311,17 +312,45 @@ def promptify(query: str, context: str, domain: str = "general") -> str:
 
 async def generate_llm_response(query: str, context: str) -> str:
     """Send prompt to Anthropic LLM and return response."""
-    anthropic = _import_anthropic()
+    # anthropic = _import_anthropic()
     
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-    response = await client.messages.create(
-        model=CHAT_MODEL,
-        max_tokens=2048,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": promptify(query, context)}],
+    # client = anthropic.AsyncAnthropic(api_key=api_key)
+    # response = await client.messages.create(
+    #     model=CHAT_MODEL,
+    #     max_tokens=2048,
+    #     system=SYSTEM_PROMPT,
+    #     messages=[{"role": "user", "content": promptify(query, context)}],
+    #     temperature=0.6,
+    # )
+    # return response.content[0].text
+    from google import genai
+    from google.genai import types
+    gemini = genai
+    client = gemini.Client(api_key=gemini_api_key).aio # Get the asynchronous client (client.aio)
+
+    # 2. Prepare the prompt (same as your original `promptify(query, context)`)
+    final_prompt = promptify(query, context) # Example of promptify logic
+
+    # 3. Define the configuration for the call
+    generation_config = types.GenerateContentConfig(
+        # The system instruction/prompt goes here
+        system_instruction=SYSTEM_PROMPT,
+        max_output_tokens=2048,
         temperature=0.6,
     )
-    return response.content[0].text
+    
+    CHAT_MODEL = "gemini-2.5-flash"
+    # 4. Make the asynchronous API call
+    response = await client.models.generate_content(
+        model=CHAT_MODEL,
+        contents=[final_prompt], # Contents is the list of user prompts/parts
+        config=generation_config
+    )
+    
+    # 5. Extract the text response
+    # The Gemini response object has a simple .text attribute
+    return response.text
+
 
 
 async def answer_question(index, query: str , cache) -> str:
