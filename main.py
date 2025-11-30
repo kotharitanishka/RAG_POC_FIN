@@ -87,6 +87,11 @@ def _import_pdf_loader():
     from langchain_community.document_loaders import PyPDFLoader
     return RecursiveCharacterTextSplitter, PyPDFLoader
 
+def _import_split_text():
+    print("Loading text splitting processing libraries...")
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    return RecursiveCharacterTextSplitter
+
 
 def _import_vectorizer():
     print("Loading embedding model (this may take a minute on first run)...")
@@ -147,6 +152,23 @@ def load_and_split_document(doc_path: str, chunk_size: int = 1000, chunk_overlap
 
 
 # =============================================================================
+# Chunking plain text 
+# =============================================================================
+
+def split_text(text: str, chunk_size: int = 1000, chunk_overlap: int = 200):
+    """split text into chunks."""
+    RecursiveCharacterTextSplitter = _import_split_text()
+    
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap
+    )
+    chunks = text_splitter.split_text(text)
+    print(f"✓ Created {len(chunks)} chunks from the text provided")
+    return chunks
+
+
+# =============================================================================
 # Embedding & Vectorization
 # =============================================================================
 
@@ -169,7 +191,15 @@ def create_vectorizer():
 def embed_chunks(vectorizer, chunks) -> list:
     """Embed all document chunks."""
     print("Embedding chunks...")
-    embeddings = vectorizer.embed_many([chunk.page_content for chunk in chunks])
+    # Handle both string chunks and Document objects
+    texts = []
+    for chunk in chunks:
+        if isinstance(chunk, str):
+            texts.append(chunk)
+        else:
+            # Assume it's a Document object with page_content attribute
+            texts.append(chunk.page_content)
+    embeddings = vectorizer.embed_many(texts)
     assert len(embeddings) == len(chunks), "Embedding count mismatch"
     print(f"✓ Embedded {len(embeddings)} chunks")
     return embeddings
@@ -193,13 +223,21 @@ def load_data_to_index(index, chunks, embeddings) -> list:
     """Load embedded chunks into the Redis index."""
     _, _, _, array_to_buffer = _import_index()
     
-    data = [
-        {
+    data = []
+    for i, chunk in enumerate(chunks):
+        # Handle both string chunks and Document objects
+        if isinstance(chunk, str):
+            content = chunk
+        else:
+            # Assume it's a Document object with page_content attribute
+            content = chunk.page_content
+        
+        data.append({
             'chunk_id': i,
-            'content': chunk.page_content,
+            'content': content,
             'text_embedding': array_to_buffer(embeddings[i], dtype='float32')
-        } for i, chunk in enumerate(chunks)
-    ]
+        })
+    
     keys = index.load(data, id_field="chunk_id")
     print(f"✓ Loaded {len(keys)} chunks into index")
     return keys
@@ -236,18 +274,15 @@ async def retrieve_context(async_index, query_vector) -> str:
         VectorQuery(
             vector=query_vector,
             vector_field_name="text_embedding",
-            return_fields=["content", "section", "page_number"],
+            return_fields=["content"],
             num_results=5
         )
     )
 
     formatted_context_list = []
     for result in results:
-        section = result.get("section", "General")
-        page = result.get("page_number", "N/A")
         content = result.get("content", "")
-        formatted_string = f"[Section: {section} | Page: {page}] {content}"
-        formatted_context_list.append(formatted_string)
+        formatted_context_list.append(content)
 
     return "\n\n".join(formatted_context_list)
 

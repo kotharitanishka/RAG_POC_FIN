@@ -20,6 +20,7 @@ from main import (
     get_redis_connection,
     create_vectorizer,
     load_and_split_document,
+    split_text,
     embed_chunks,
     create_async_index,
     load_data_to_index,
@@ -27,6 +28,9 @@ from main import (
     SCHEMA,
     INDEX_NAME
 )
+
+# Import audio processing function
+from audio_process import load_audio_and_transcribe
 
 app = FastAPI(
     title="RAG POC API",
@@ -52,7 +56,7 @@ class QueryResponse(BaseModel):
     status: str
 
 
-class LoadPDFResponse(BaseModel):
+class LoadDocumentResponse(BaseModel):
     message: str
     status: str
     chunks_loaded: Optional[int] = None
@@ -75,7 +79,7 @@ async def root():
     return {
         "message": "RAG POC API",
         "endpoints": {
-            "load_pdf": "/load-pdf",
+            "load_document": "/load-pdf (supports PDF and audio files)",
             "query": "/query",
             "health": "/health"
         }
@@ -99,29 +103,45 @@ async def health_check():
     }
 
 
-@app.post("/load-pdf", response_model=LoadPDFResponse)
-async def load_pdf(file: UploadFile = File(...)):
-    """
-    Load and process a PDF file.
+def _load_and_split_audio(audio_file_path: str, chunk_size: int = 1000, chunk_overlap: int = 200):
+    """Load audio file, transcribe it, and split into chunks."""
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_core.documents import Document
     
-    - **file**: PDF file to upload and process
-    - Returns: Status message and number of chunks loaded
+    # Transcribe audio to text
+    print("Transcribing audio file...")
+    transcribed_text = load_audio_and_transcribe(audio_file_path)
+    chunks = split_text(transcribed_text)
+    return chunks
+    
+
+@app.post("/load-file", response_model=LoadDocumentResponse)
+async def load_file(file: UploadFile = File(...)):
     """
+    Load and process a PDF or audio file.
+    
+    - **file**: PDF or audio file (supports: .pdf, .mp3, .wav, .m4a, .flac, .ogg) to upload and process
+    - Returns: Status message, file type, and number of chunks loaded
+    """
+    # Supported file extensions
+    pdf_extensions = ['.pdf']
+    audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.wma', '.aac']
+    supported_extensions = pdf_extensions + audio_extensions
+    
+    # Get file extension
+    file_ext = Path(file.filename).suffix.lower() if file.filename else ''
+    
     # Validate file type
-    if not file.filename.endswith('.pdf'):
+    if file_ext not in supported_extensions:
         raise HTTPException(
             status_code=400,
-            detail="File must be a PDF (.pdf extension required)"
+            detail=f"Unsupported file type. Supported formats: PDF ({', '.join(pdf_extensions)}) or Audio ({', '.join(audio_extensions)})"
         )
     
-    # Check Redis connection
-    try:
-        get_redis_connection()
-    except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Redis connection failed: {str(e)}. Please ensure Redis is running."
-        )
+    # Determine file type
+    is_pdf = file_ext in pdf_extensions
+    is_audio = file_ext in audio_extensions
+    file_type = "PDF" if is_pdf else "Audio"
     
     # Save uploaded file temporarily
     temp_dir = tempfile.mkdtemp()
@@ -133,11 +153,19 @@ async def load_pdf(file: UploadFile = File(...)):
             shutil.copyfileobj(file.file, buffer)
         
         print(f"\n{'='*50}")
-        print(f"Processing PDF: {file.filename}")
+        print(f"Processing {file_type} file: {file.filename}")
         print(f"{'='*50}")
         
-        # Load and split document
-        chunks = load_and_split_document(temp_file_path)
+        # Load and split document based on file type
+        if is_pdf:
+            chunks = load_and_split_document(temp_file_path)
+        elif is_audio:
+            chunks = _load_and_split_audio(temp_file_path)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type"
+            )
         
         # Create vectorizer if not exists
         if _global_state["vectorizer"] is None:
@@ -158,19 +186,22 @@ async def load_pdf(file: UploadFile = File(...)):
         _global_state["initialized"] = True
         
         print(f"{'='*50}")
-        print("✓ PDF loaded successfully")
+        print(f"✓ {file_type} file loaded successfully")
         print(f"{'='*50}\n")
         
-        return LoadPDFResponse(
-            message=f"PDF '{file.filename}' loaded successfully",
+        return LoadDocumentResponse(
+            message=f"{file_type} file '{file.filename}' loaded successfully",
             status="success",
+            file_type=file_type.lower(),
             chunks_loaded=len(keys)
         )
     
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing PDF: {str(e)}"
+            detail=f"Error processing {file_type} file: {str(e)}"
         )
     
     finally:
@@ -192,7 +223,7 @@ async def query_documents(request: QueryRequest):
     if not _global_state["initialized"]:
         raise HTTPException(
             status_code=400,
-            detail="No PDF loaded. Please load a PDF first using /load-pdf endpoint."
+            detail="No document loaded. Please load a PDF or audio file first using /load-pdf endpoint."
         )
     
     if not request.query or not request.query.strip():
