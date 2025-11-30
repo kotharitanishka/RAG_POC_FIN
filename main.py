@@ -12,7 +12,7 @@ import getpass
 from dotenv import load_dotenv
 
 load_dotenv()
-api_key = os.getenv("API_KEY")
+api_key = os.getenv("CLAUDE_API_KEY")
 
 # Only lightweight imports at startup
 warnings.filterwarnings("ignore")
@@ -319,7 +319,7 @@ async def generate_llm_response(query: str, context: str) -> str:
         max_tokens=2048,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": promptify(query, context)}],
-        temperature=0.1,
+        temperature=0.6,
     )
     return response.content[0].text
 
