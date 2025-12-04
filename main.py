@@ -59,7 +59,7 @@ SCHEMA = {
             "name": "text_embedding",
             "type": "vector",
             "attrs": {
-                "dims": 384,
+                "dims": 768,
                 "distance_metric": "cosine",
                 "algorithm": "hnsw",
                 "datatype": "float32"
@@ -178,7 +178,7 @@ def create_vectorizer():
     HFTextVectorizer, EmbeddingsCache = _import_vectorizer()
     
     hf = HFTextVectorizer(
-        model="sentence-transformers/all-MiniLM-L6-v2",
+        model="AkshitaS/bhasha-embed-v0",
         cache=EmbeddingsCache(
             name="embedcache",
             ttl=600,
@@ -328,7 +328,7 @@ async def generate_llm_response(query: str, context: str) -> str:
     gemini = genai
     client = gemini.Client(api_key=gemini_api_key).aio # Get the asynchronous client (client.aio)
 
-    # 2. Prepare the prompt (same as your original `promptify(query, context)`)
+    # 2. Prepare the prompt 
     final_prompt = promptify(query, context) # Example of promptify logic
 
     # 3. Define the configuration for the call

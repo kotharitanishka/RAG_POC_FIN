@@ -29,3 +29,31 @@ def load_audio_and_transcribe(audio_file_path: str) :
     audio_transcripts = result["text"]
     print(audio_transcripts)
     return audio_transcripts 
+
+
+def hindi_audio_transcribe(audio_file_path: str):
+    import torch
+    from transformers import pipeline
+
+    # path to the audio file to be transcribed
+    audio = audio_file_path
+    
+    device = "cpu"
+
+    transcribe = pipeline(
+                    task="automatic-speech-recognition", 
+                    model="vasista22/whisper-hindi-small", 
+                    chunk_length_s=30, 
+                    device=device
+                )
+    transcribe.model.config.forced_decoder_ids = transcribe.tokenizer.get_decoder_prompt_ids(
+                                                                                language="hi", 
+                                                                                task="transcribe"
+                                                                            )
+
+    results = transcribe(audio)["text"]
+    print('Transcription: ', results)
+    return results
+
+
+# hindi_audio_transcribe("resources/test_audio.wav")

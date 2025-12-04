@@ -3,7 +3,7 @@ FastAPI application for RAG (Retrieval-Augmented Generation) system
 Provides endpoints to load PDFs and query documents
 """
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, Form, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -30,7 +30,7 @@ from main import (
 )
 
 # Import audio processing function
-from audio_process import load_audio_and_transcribe
+from audio_process import load_audio_and_transcribe, hindi_audio_transcribe
 
 app = FastAPI(
     title="RAG POC API",
@@ -105,20 +105,24 @@ async def health_check():
     }
 
 
-def _load_and_split_audio(audio_file_path: str, chunk_size: int = 1000, chunk_overlap: int = 200):
+def _load_and_split_audio(audio_file_path: str, lang:str, chunk_size: int = 1000, chunk_overlap: int = 200):
     """Load audio file, transcribe it, and split into chunks."""
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     from langchain_core.documents import Document
     
     # Transcribe audio to text
     print("Transcribing audio file...")
-    transcribed_text = load_audio_and_transcribe(audio_file_path)
+    if lang.lower() == "en":
+            print("This is the English transcription")
+    elif lang.lower() == "hi":
+            print("This is the Hindi transcription")
+    transcribed_text = hindi_audio_transcribe(audio_file_path) if lang!="en" else load_audio_and_transcribe(audio_file_path)
     chunks = split_text(transcribed_text)
     return chunks
     
 
 @app.post("/load-file", response_model=LoadDocumentResponse)
-async def load_file(file: UploadFile = File(...)):
+async def load_file(lang: str=Form("en"), file: UploadFile = File(...)):
     """
     Load and process a PDF or audio file.
     
@@ -162,7 +166,7 @@ async def load_file(file: UploadFile = File(...)):
         if is_pdf:
             chunks = load_and_split_document(temp_file_path)
         elif is_audio:
-            chunks = _load_and_split_audio(temp_file_path)
+            chunks = _load_and_split_audio(temp_file_path, lang)
         else:
             raise HTTPException(
                 status_code=400,
