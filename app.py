@@ -30,7 +30,7 @@ from main import (
 )
 
 # Import audio processing function
-from audio_process import load_audio_and_transcribe, hindi_audio_transcribe
+from audio_process import load_audio_and_transcribe, load_indian_audio_and_transcribe
 
 app = FastAPI(
     title="RAG POC API",
@@ -107,16 +107,16 @@ async def health_check():
 
 def _load_and_split_audio(audio_file_path: str, lang:str, chunk_size: int = 1000, chunk_overlap: int = 200):
     """Load audio file, transcribe it, and split into chunks."""
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from langchain_core.documents import Document
     
     # Transcribe audio to text
     print("Transcribing audio file...")
     if lang.lower() == "en":
             print("This is the English transcription")
-    elif lang.lower() == "hi":
-            print("This is the Hindi transcription")
-    transcribed_text = hindi_audio_transcribe(audio_file_path) if lang!="en" else load_audio_and_transcribe(audio_file_path)
+    transcribed_text = ""
+    if lang=="en" :
+        transcribed_text = load_audio_and_transcribe(audio_file_path)
+    else :
+        transcribed_text = load_indian_audio_and_transcribe(audio_file_path, lang)
     chunks = split_text(transcribed_text)
     return chunks
     

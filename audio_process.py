@@ -1,3 +1,6 @@
+import requests
+
+
 def _import_audio_transcribe():
     print("Loading audio transcribe  libraries...")
     from transformers import pipeline
@@ -27,33 +30,39 @@ def load_audio_and_transcribe(audio_file_path: str) :
 
     # Print the transcribed text
     audio_transcripts = result["text"]
-    print(audio_transcripts)
+    print("English transcription: ",audio_transcripts)
     return audio_transcripts 
 
-
-def hindi_audio_transcribe(audio_file_path: str):
-    import torch
-    from transformers import pipeline
-
-    # path to the audio file to be transcribed
-    audio = audio_file_path
+def load_indian_audio_and_transcribe(audio_file_path: str, lang : str) :
+    # --- Add POST Request Here ---
+    API_URL = 'https://pistillate-birdie-placatingly.ngrok-free.dev/transcribe_audio'
     
-    device = "cpu"
+    # Prepare the files and data for the POST request
+    files = {
+        'audio_file': (audio_file_path, open(audio_file_path, 'rb'), 'audio/m4a'),
+    }
+    data = {
+        'locale': lang,
+    }
+    
+    try:
+        # Make the POST request
+        response = requests.post(API_URL, files=files, data=data)
+        response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+        
+        # Extract the JSON response
+        response_json = response.json()
+        
+        # Extract the transcription text from the JSON response
+        transcribed_text = response_json.get("transcription_ctc", "")
+        
+        if not transcribed_text:
+            print("Warning: Transcription was empty or missing from response.")
+        
+        print(lang , " transcription : " , transcribed_text)
+        return transcribed_text
+            
+    except requests.exceptions.RequestException as e:
+        print(f"Error during API call: {e}")
+        transcribed_text = "" # Set to empty on failure
 
-    transcribe = pipeline(
-                    task="automatic-speech-recognition", 
-                    model="vasista22/whisper-hindi-small", 
-                    chunk_length_s=30, 
-                    device=device
-                )
-    transcribe.model.config.forced_decoder_ids = transcribe.tokenizer.get_decoder_prompt_ids(
-                                                                                language="hi", 
-                                                                                task="transcribe"
-                                                                            )
-
-    results = transcribe(audio)["text"]
-    print('Transcription: ', results)
-    return results
-
-
-# hindi_audio_transcribe("resources/test_audio.wav")

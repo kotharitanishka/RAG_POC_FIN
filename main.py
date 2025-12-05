@@ -7,6 +7,7 @@ Optimized with lazy imports for faster startup.
 
 import os
 import asyncio
+import uuid
 import warnings
 import getpass
 from dotenv import load_dotenv
@@ -178,7 +179,7 @@ def create_vectorizer():
     HFTextVectorizer, EmbeddingsCache = _import_vectorizer()
     
     hf = HFTextVectorizer(
-        model="AkshitaS/bhasha-embed-v0",
+        model="ai4bharat/indic-bert",
         cache=EmbeddingsCache(
             name="embedcache",
             ttl=600,
@@ -216,6 +217,12 @@ def create_async_index(schema: dict):
     
     index = AsyncSearchIndex.from_dict(schema, redis_url=REDIS_URL)
     index.create(overwrite=True, drop=True)
+    # try:
+    #     index.create()
+    # except Exception as e:
+    #     # Handle cases where the index already exists (e.g., Redisearch error)
+    #     print(f"Index creation skipped/failed (likely already exists): {e}")
+    #     pass
     print(f"✓ Async Index '{schema['index']['name']}' created")
     return index
 
@@ -232,9 +239,9 @@ def load_data_to_index(index, chunks, embeddings) -> list:
         else:
             # Assume it's a Document object with page_content attribute
             content = chunk.page_content
-        
+        unique_id = str(uuid.uuid4())
         data.append({
-            'chunk_id': i,
+            'chunk_id': unique_id,
             'content': content,
             'text_embedding': array_to_buffer(embeddings[i], dtype='float32')
         })
