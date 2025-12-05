@@ -152,6 +152,47 @@ def load_and_split_document(doc_path: str, chunk_size: int = 1000, chunk_overlap
     print(f"✓ Created {len(chunks)} chunks from: {doc_path}")
     return chunks
 
+def load_and_split_docx(doc_path: str, chunk_size: int = 1000, chunk_overlap: int = 200):
+    """Load DOCX and split into chunks."""
+    RecursiveCharacterTextSplitter = _import_split_text()
+    
+    # Import docx library
+    try:
+        from docx import Document
+    except ImportError:
+        raise ImportError("python-docx is required. Install with: pip install python-docx")
+    
+    # Read docx file
+    doc = Document(doc_path)
+    text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+    
+    # Split into chunks
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap
+    )
+    chunks = text_splitter.create_documents([text])
+    print(f"✓ Created {len(chunks)} chunks from: {doc_path}")
+    return chunks
+
+
+def load_and_split_txt(doc_path: str, chunk_size: int = 1000, chunk_overlap: int = 200):
+    """Load TXT file and split into chunks."""
+    RecursiveCharacterTextSplitter = _import_split_text()
+    
+    # Read text file
+    with open(doc_path, 'r', encoding='utf-8') as f:
+        text = f.read()
+    
+    # Split into chunks
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap
+    )
+    chunks = text_splitter.create_documents([text])
+    print(f"✓ Created {len(chunks)} chunks from: {doc_path}")
+    return chunks
+
 
 # =============================================================================
 # Chunking plain text 

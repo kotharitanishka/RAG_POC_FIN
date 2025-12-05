@@ -20,6 +20,8 @@ from main import (
     get_redis_connection,
     create_vectorizer,
     load_and_split_document,
+    load_and_split_docx,
+    load_and_split_txt,
     split_text,
     embed_chunks,
     create_async_index,
@@ -124,15 +126,20 @@ def _load_and_split_audio(audio_file_path: str, lang:str, chunk_size: int = 1000
 @app.post("/load-file", response_model=LoadDocumentResponse)
 async def load_file(lang: str=Form("en"), file: UploadFile = File(...)):
     """
-    Load and process a PDF or audio file.
+    Load and process a PDF, Word, TXT, or audio file.
     
-    - **file**: PDF or audio file (supports: .pdf, .mp3, .wav, .m4a, .flac, .ogg) to upload and process
+    - **file**: Document or audio file to upload and process
+      - Documents: .pdf, .docx, .doc, .txt
+      - Audio: .mp3, .wav, .m4a, .flac, .ogg, .wma, .aac
     - Returns: Status message, file type, and number of chunks loaded
     """
     # Supported file extensions
     pdf_extensions = ['.pdf']
+    doc_extensions = ['.docx', '.doc']
+    txt_extensions = ['.txt']
     audio_extensions = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.wma', '.aac']
-    supported_extensions = pdf_extensions + audio_extensions
+    document_extensions = pdf_extensions + doc_extensions + txt_extensions
+    supported_extensions = document_extensions  + audio_extensions
     
     # Get file extension
     file_ext = Path(file.filename).suffix.lower() if file.filename else ''
@@ -141,13 +148,25 @@ async def load_file(lang: str=Form("en"), file: UploadFile = File(...)):
     if file_ext not in supported_extensions:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type. Supported formats: PDF ({', '.join(pdf_extensions)}) or Audio ({', '.join(audio_extensions)})"
+            detail=f"Unsupported file type. Supported formats: PDF ({', '.join(pdf_extensions)}), Word ({', '.join(doc_extensions)}), Text ({', '.join(txt_extensions)}), or Audio ({', '.join(audio_extensions)})"
         )
     
     # Determine file type
     is_pdf = file_ext in pdf_extensions
+    is_docx = file_ext in doc_extensions
+    is_txt = file_ext in txt_extensions
     is_audio = file_ext in audio_extensions
-    file_type = "PDF" if is_pdf else "Audio"
+    
+    if is_pdf:
+        file_type = "PDF"
+    elif is_docx:
+        file_type = "Word"
+    elif is_txt:
+        file_type = "Text"
+    elif is_audio:
+        file_type = "Audio"
+    else:
+        file_type = "Unknown"
     
     # Save uploaded file temporarily
     temp_dir = tempfile.mkdtemp()
@@ -165,6 +184,10 @@ async def load_file(lang: str=Form("en"), file: UploadFile = File(...)):
         # Load and split document based on file type
         if is_pdf:
             chunks = load_and_split_document(temp_file_path)
+        elif is_docx:
+            chunks = load_and_split_docx(temp_file_path)
+        elif is_txt:
+            chunks = load_and_split_txt(temp_file_path)
         elif is_audio:
             chunks = _load_and_split_audio(temp_file_path, lang)
         else:
