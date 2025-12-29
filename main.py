@@ -34,16 +34,19 @@ INDEX_NAME = "redisvl"
 DOC_PATH = "resources/Questionnaire_for_Improving_Liquidity_in_Bond_Market.pdf"
 
 SYSTEM_PROMPT = """
-You are an AI assistant that answers questions using ONLY the retrieved context 
-from the user's PDFs. If an answer is not fully supported by the context, 
-you must respond: "I could not find this information in the provided documents."
+You are a high-precision Multilingual AI Assistant. Your knowledge base consists of PDF documents and Transcribed Audio files in English and multiple Indian languages.
 
-Rules:
-- Never make up information.
-- Never use external knowledge unless the user asks for it explicitly.
-- Prefer quoting or summarizing retrieved passages when possible.
-- Stay factual, concise, and grounded in the provided text.
-- If context is unclear or conflicting, state the ambiguity.
+OPERATIONAL RULES:
+0. RESPONSE : Keep the responses short crisp to the point .
+1. GROUNDING: Answer ONLY using provided context. If information is missing, state: "I could not find this information in the provided documents."
+2. LANGUAGE MATCHING: Respond in the specific language used by the user in their query; default would be english.
+3. CROSS-LINGUAL BRIDGE & VERIFICATION: 
+   - You must translate facts accurately from the context language into the user's query language.
+   - For every major fact provided, follow it with the original text from the source in its original language, placed in brackets. 
+   - Format: [Original: "Context text in original script"]
+4. ACCURACY: Never invent policy details, dates, or numbers. Do not use external knowledge.
+5. TERMINOLOGY: Preserve technical or financial terms. Match the user's mixing style (e.g., Hinglish/Marathlish) for clarity if they use it.
+6. ENTITY STRICTNESS: Ensure the answer corresponds exactly to the entity (person/company/policy) asked in the query. Do not offer information about similar entities unless relevant to the comparison.
 """
 
 # Index schema for Redis Vector Search
@@ -55,11 +58,14 @@ SCHEMA = {
     },
     "fields": [
         {"name": "chunk_id", "type": "tag", "attrs": {"sortable": True}},
+        {"name": "document_id", "type": "tag", "attrs": {"sortable": True}},
+
         {"name": "content", "type": "text"},
         {
             "name": "text_embedding",
             "type": "vector",
             "attrs": {
+                # "dims" : 384,
                 "dims": 768,
                 "distance_metric": "cosine",
                 "algorithm": "hnsw",
@@ -139,7 +145,7 @@ def get_redis_connection():
 # Document Processing
 # =============================================================================
 
-def load_and_split_document(doc_path: str, chunk_size: int = 1000, chunk_overlap: int = 200):
+def load_and_split_document(doc_path: str, chunk_size: int = 600, chunk_overlap: int = 150):
     """Load PDF and split into chunks."""
     RecursiveCharacterTextSplitter, PyPDFLoader = _import_pdf_loader()
     
@@ -220,7 +226,8 @@ def create_vectorizer():
     HFTextVectorizer, EmbeddingsCache = _import_vectorizer()
     
     hf = HFTextVectorizer(
-        model="ai4bharat/indic-bert",
+        # model="ai4bharat/indic-bert",
+        model="sentence-transformers/all-MiniLM-L6-v2",
         cache=EmbeddingsCache(
             name="embedcache",
             ttl=600,
@@ -252,18 +259,38 @@ def embed_chunks(vectorizer, chunks) -> list:
 # Index Management
 # =============================================================================
 
-def create_async_index(schema: dict):
+def create_async_index(schema: dict, embed_cache=None, llm_cache=None):
+    
+    # Surgical clears prevent "stale" cache hits
+    if llm_cache: llm_cache.clear()
+    #if embed_cache: embed_cache.clear()
+    
+    
     """Create Redis search index from schema."""
     AsyncSearchIndex, _, _, _ = _import_index()
-    
+    index_name = schema["index"]["name"]
     index = AsyncSearchIndex.from_dict(schema, redis_url=REDIS_URL)
-    index.create(overwrite=True, drop=True)
-    # try:
-    #     index.create()
-    # except Exception as e:
-    #     # Handle cases where the index already exists (e.g., Redisearch error)
-    #     print(f"Index creation skipped/failed (likely already exists): {e}")
-    #     pass
+    # index.create(overwrite=True, drop=True)
+    
+    # 1️⃣ Check if index already exists
+    try:
+        from redis import Redis
+        r = Redis.from_url(REDIS_URL)
+
+        existing_indexes = r.execute_command("FT._LIST")
+
+        if index_name in existing_indexes:
+            print(f"✓ Index '{index_name}' already exists — returning existing")
+            return index   # Just return the object without creating
+    except Exception as e:
+        print(f"Index existence check failed, attempting creation: {e}")
+        
+    try:
+        index.create()
+    except Exception as e:
+        # Handle cases where the index already exists (e.g., Redisearch error)
+        print(f"Index creation skipped/failed (likely already exists): {e}")
+        pass
     print(f"✓ Async Index '{schema['index']['name']}' created")
     return index
 
@@ -308,14 +335,19 @@ def user_query_caching(hf):
         vectorizer=hf,                  
         redis_url=REDIS_URL,          
         ttl=600,                         
-        distance_threshold=0.45,        
+        distance_threshold=0.12,        
         overwrite=True      
     )
 
     print("Cache created successfully:", llmcache)
     return llmcache
 
-async def retrieve_context(async_index, query_vector) -> str:
+async def retrieve_context(
+    async_index, 
+    query_vector, 
+    retrieval_distance_threshold=0.3,
+    num_results=15
+    ) -> str:
     """Fetch the relevant context from Redis using vector search."""
     _, _, VectorQuery, _ = _import_index()
     
@@ -324,14 +356,41 @@ async def retrieve_context(async_index, query_vector) -> str:
             vector=query_vector,
             vector_field_name="text_embedding",
             return_fields=["content"],
-            num_results=5
+            num_results=num_results
         )
     )
 
     formatted_context_list = []
-    for result in results:
+    # for result in results:
+    #     distance_raw  = result.get("vector_distance")
+    #     content = result.get("content", "")
+    #     #formatted_context_list.append(content)
+        
+    #     if distance is not None and distance <= retrieval_distance_threshold:
+    #         formatted_context_list.append(content)
+    #         print(f"  ✓ Chunk (distance={distance:.3f})")
+    #     else:
+    #         print(f"  ✗ Skipped (distance={distance:.3f} > {retrieval_distance_threshold})")
+    
+    for idx, result in enumerate(results, 1):
+        distance_raw = result.get("vector_distance")
         content = result.get("content", "")
-        formatted_context_list.append(content)
+        
+        # Convert distance to float if it's a string
+        try:
+            if distance_raw is None:
+                print(f"  ⚠ Chunk #{idx}: No distance found, skipping")
+                continue
+            distance = float(distance_raw)
+        except (ValueError, TypeError) as e:
+            print(f"  ⚠ Chunk #{idx}: Invalid distance value '{distance_raw}' ({type(distance_raw).__name__}), skipping")
+            continue
+        
+        if content : #distance <= retrieval_distance_threshold:
+            formatted_context_list.append(content)
+            print(f"  ✓ Chunk (distance={distance:.3f})")
+        else:
+            print(f"  ✗ Skipped #{idx} (distance={distance:.3f} > {retrieval_distance_threshold})")
 
     return "\n\n".join(formatted_context_list)
 
@@ -341,10 +400,14 @@ async def retrieve_context(async_index, query_vector) -> str:
 # =============================================================================
 
 def promptify(query: str, context: str, domain: str = "general") -> str:
-    """Generates a prompt for RAG."""
+    # Generates a language-agnostic prompt for cross-lingual RAG
     return f'''You are an expert {domain} assistant. 
-    Use the provided context below to answer the user's question.
+    Review the context blocks below to answer the question.
     
+    STRICT INSTRUCTION:
+    - Keep the response short crisp to the point. 
+    - Respond in the language of the User Question ; default as english . 
+    - Every factual claim MUST be followed by its original phrase from the context in brackets [Original: "..."].
     - Base your answer ONLY on the provided context.
     - If you cannot answer based on the context, do not guess.
     
@@ -384,7 +447,7 @@ async def generate_llm_response(query: str, context: str) -> str:
         # The system instruction/prompt goes here
         system_instruction=SYSTEM_PROMPT,
         max_output_tokens=2048,
-        temperature=0.6,
+        temperature=0.15,
     )
     
     CHAT_MODEL = "gemini-2.5-flash"
@@ -393,7 +456,7 @@ async def generate_llm_response(query: str, context: str) -> str:
         model=CHAT_MODEL,
         contents=[final_prompt], # Contents is the list of user prompts/parts
         config=generation_config
-    )
+    )   
     
     # 5. Extract the text response
     # The Gemini response object has a simple .text attribute
@@ -448,9 +511,18 @@ def initialize(doc_path: str = DOC_PATH):
 
     # 4. Embed chunks
     embeddings = embed_chunks(_vectorizer, chunks)
+    
+    # 5. Create & load index (Updated to clear caches surgically)
+    # Extract the embedding cache from the vectorizer object
+    embed_cache = _vectorizer.cache if hasattr(_vectorizer, 'cache') else None
 
     # 5. Create & load index
-    async_index = create_async_index(SCHEMA)
+    # async_index = create_async_index(SCHEMA)
+    async_index = create_async_index(
+        SCHEMA, 
+        embed_cache=embed_cache, 
+        llm_cache=llmCache
+    )
     load_data_to_index(async_index, chunks, embeddings)
 
     print("=" * 50)
@@ -491,7 +563,7 @@ def main():
     #ensure_api_key()
 
     # Initialize (lazy loading happens here)
-    async_index,llmCache = initialize()
+    async_index,llmCache = initialize("resources/Questionnaire_for_Improving_Liquidity_in_Bond_Market.pdf")
     
     # Test
     questions = ["In this project, list technologies utilized"]

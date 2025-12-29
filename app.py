@@ -206,8 +206,19 @@ async def load_file(lang: str=Form("en"), file: UploadFile = File(...)):
         # Embed chunks
         embeddings = embed_chunks(_global_state["vectorizer"], chunks)
         
+        # --- CACHE CLEARING LOGIC ---
+        # Extract cache objects from global state
+        embed_cache_to_clear = _global_state["vectorizer"].cache if _global_state["vectorizer"] else None
+        llm_cache_to_clear = _global_state["cache"]
+        
         # Create or recreate index
-        async_index = create_async_index(SCHEMA)
+        # async_index = create_async_index(SCHEMA)
+        # Pass these to the updated create_async_index function
+        async_index = create_async_index(
+            SCHEMA, 
+            embed_cache=embed_cache_to_clear, 
+            llm_cache=llm_cache_to_clear
+        )
         keys = load_data_to_index(async_index, chunks, embeddings)
         #load_data_to_chroma(chunks,filepath)
         
@@ -250,22 +261,30 @@ async def query_documents(request: QueryRequest):
     - **query**: The question to ask about the documents
     - Returns: Answer based on the document content
     """
-    if not _global_state["initialized"]:
-        raise HTTPException(
-            status_code=400,
-            detail="No document loaded. Please load a PDF or audio file first using /load-pdf endpoint."
-        )
+    # if not _global_state["initialized"]:
+    #     raise HTTPException(
+    #         status_code=400,
+    #         detail="No document loaded. Please load a PDF or audio file first using /load-pdf endpoint."
+    #     )
     
     if not request.query or not request.query.strip():
         raise HTTPException(
             status_code=400,
             detail="Query cannot be empty"
         )
-    
+        
+    # Create vectorizer if not exists
+    async_index = create_async_index(SCHEMA)
+    if _global_state["vectorizer"] is None:
+        _global_state["vectorizer"] = create_vectorizer()
+        # Set global vectorizer in main.py for embed_query function
+        main._vectorizer = _global_state["vectorizer"]
+        _global_state["cache"] = user_query_caching(_global_state["vectorizer"])
+    _global_state["async_index"] = async_index
     try:
         # Get answer using RAG
         answer = await answer_question(
-            _global_state["async_index"],
+            _global_state["async_index"] ,
             request.query,
             _global_state["cache"], 
             request.use_cache,
