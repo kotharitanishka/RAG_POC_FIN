@@ -32,7 +32,7 @@ from main import (
 )
 
 # Import audio processing function
-from audio_process import load_audio_and_transcribe, load_indian_audio_and_transcribe
+from audio_process import load_audio_and_transcribe, load_indian_audio_and_transcribe, load_hindi_audio_and_transcribe
 
 app = FastAPI(
     title="RAG POC API",
@@ -117,6 +117,8 @@ def _load_and_split_audio(audio_file_path: str, lang:str, chunk_size: int = 1000
     transcribed_text = ""
     if lang=="en" :
         transcribed_text = load_audio_and_transcribe(audio_file_path)
+    elif lang == "hi" : 
+        transcribed_text = load_hindi_audio_and_transcribe(audio_file_path, lang)
     else :
         transcribed_text = load_indian_audio_and_transcribe(audio_file_path, lang)
     chunks = split_text(transcribed_text)
