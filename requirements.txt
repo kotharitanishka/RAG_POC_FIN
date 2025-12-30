@@ -14,6 +14,7 @@ langchain-text-splitters>=0.0.1
 langchain-core>=0.1.0
 
 # LLM
+google-genai>=1.0.0
 anthropic>=0.18.0
 
 # Embeddings
@@ -26,6 +27,8 @@ python-dotenv>=1.0.0
 pypdf>=3.0.0
 
 # Audio transcription
-transformers>=4.30.0
 torch>=2.0.0
+transformers>=4.30.0
 librosa>=0.10.0
+static-ffmpeg>=2.5
+indic-nlp-library>=0.92

@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 load_dotenv()
 api_key = os.getenv("CLAUDE_API_KEY")
 gemini_api_key = os.getenv("GEMINI_API_KEY")
+redis_host=os.getenv("REDIS_HOST")
+redis_port=os.getenv("REDIS_PORT")
 
 # Only lightweight imports at startup
 warnings.filterwarnings("ignore")
@@ -24,8 +26,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # Configuration
 # =============================================================================
 
-REDIS_HOST = "localhost"
-REDIS_PORT = "6379"
+REDIS_HOST = redis_host
+REDIS_PORT = redis_port
 REDIS_PASSWORD = ""
 REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
 
