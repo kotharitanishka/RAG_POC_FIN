@@ -1,34 +1,35 @@
+pydantic>=2.0.0
+PyYAML>=6.0.1
 # FastAPI and server
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-python-multipart>=0.0.6
+fastapi
+uvicorn[standard]
+python-multipart
 
 # Redis and Vector Search
-redis>=5.0.0
-redisvl>=0.1.0
+redisvl>=0.9.0
+redis
 
 # LangChain for document processing
-langchain>=0.1.0
-langchain-community>=0.0.20
-langchain-text-splitters>=0.0.1
-langchain-core>=0.1.0
+langchain
+langchain-community
+langchain-text-splitters
+langchain-core
 
 # LLM
-google-genai>=1.0.0
-anthropic>=0.18.0
+google-genai
+anthropic
 
 # Embeddings
-sentence-transformers>=2.2.0
+sentence-transformers
 
 # Environment
-python-dotenv>=1.0.0
+python-dotenv
 
 # PDF processing (usually comes with langchain-community)
-pypdf>=3.0.0
+pypdf
 
 # Audio transcription
-torch>=2.0.0
-transformers>=4.30.0
-librosa>=0.10.0
-static-ffmpeg>=2.5
-indic-nlp-library>=0.92
+torch
+transformers
+librosa
+indic-nlp-library

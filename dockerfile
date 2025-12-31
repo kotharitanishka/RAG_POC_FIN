@@ -1,21 +1,26 @@
-FROM python:3.13-alpine
+# Use 3.11-slim for a smaller, faster, and more stable build
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy requirements first
+# 1. Install system dependencies
+# ffmpeg (audio), libmagic (file types), and build-essential (for C-extensions)
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libmagic1 \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Copy requirements
 COPY requirements.txt .
 
-# Install runtime deps only
-RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
+# 3. Install runtime deps (No trusted-host needed usually on 3.11)
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Create logs directory
+# 4. Create logs and copy code
 RUN mkdir -p /logs
+COPY . .
 
-# Copy .env file
-COPY .env .
-
-# Expose the server port
+# 5. Expose and Start
 EXPOSE 6901
-
-# Start the server
 CMD ["python", "app.py"]

@@ -227,14 +227,17 @@ def create_vectorizer():
     """Create HuggingFace text vectorizer with embedding cache."""
     HFTextVectorizer, EmbeddingsCache = _import_vectorizer()
     
+    # Initialize the cache first
+    embed_cache = EmbeddingsCache(
+        name="embedcache",
+        redis_url=REDIS_URL,
+        ttl=600
+    )
+    
     hf = HFTextVectorizer(
         # model="ai4bharat/indic-bert",
         model="sentence-transformers/all-MiniLM-L6-v2",
-        cache=EmbeddingsCache(
-            name="embedcache",
-            ttl=600,
-            redis_url=REDIS_URL,
-        )
+        cache=embed_cache
     )
     print("✓ Vectorizer ready")
     return hf
