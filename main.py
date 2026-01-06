@@ -67,8 +67,8 @@ SCHEMA = {
             "name": "text_embedding",
             "type": "vector",
             "attrs": {
-                # "dims" : 384,
-                "dims": 768,
+                "dims" : 384,
+                # "dims": 768,
                 "distance_metric": "cosine",
                 "algorithm": "hnsw",
                 "datatype": "float32"
@@ -267,7 +267,8 @@ def embed_chunks(vectorizer, chunks) -> list:
 def create_async_index(schema: dict, embed_cache=None, llm_cache=None):
     
     # Surgical clears prevent "stale" cache hits
-    if llm_cache: llm_cache.clear()
+    if llm_cache: 
+        llm_cache.clear()
     #if embed_cache: embed_cache.clear()
     
     
@@ -277,12 +278,14 @@ def create_async_index(schema: dict, embed_cache=None, llm_cache=None):
     index = AsyncSearchIndex.from_dict(schema, redis_url=REDIS_URL)
     # index.create(overwrite=True, drop=True)
     
+    from redis import Redis
+    r = Redis.from_url(REDIS_URL)
     # 1️⃣ Check if index already exists
     try:
-        from redis import Redis
-        r = Redis.from_url(REDIS_URL)
+        
 
         existing_indexes = r.execute_command("FT._LIST")
+        existing_indexes = [i.decode() for i in existing_indexes]
 
         if index_name in existing_indexes:
             print(f"✓ Index '{index_name}' already exists — returning existing")
@@ -290,12 +293,7 @@ def create_async_index(schema: dict, embed_cache=None, llm_cache=None):
     except Exception as e:
         print(f"Index existence check failed, attempting creation: {e}")
         
-    try:
-        index.create()
-    except Exception as e:
-        # Handle cases where the index already exists (e.g., Redisearch error)
-        print(f"Index creation skipped/failed (likely already exists): {e}")
-        pass
+    index.create()
     print(f"✓ Async Index '{schema['index']['name']}' created")
     return index
 
