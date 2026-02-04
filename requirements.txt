@@ -33,3 +33,6 @@ torch
 transformers
 librosa
 indic-nlp-library
+
+faster-whisper
+deep-translator

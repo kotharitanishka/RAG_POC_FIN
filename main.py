@@ -36,7 +36,7 @@ INDEX_NAME = "redisvl"
 DOC_PATH = "resources/Questionnaire_for_Improving_Liquidity_in_Bond_Market.pdf"
 
 SYSTEM_PROMPT = """
-You are a high-precision Multilingual AI Assistant. Your knowledge base consists of PDF documents and Transcribed Audio files in English and multiple Indian languages.
+You are a high-precision Multilingual AI Assistant. Your knowledge base consists of FAQS ,PDF documents and Transcribed Audio files in English and multiple Indian languages.
 
 OPERATIONAL RULES:
 0. RESPONSE : Keep the responses short crisp to the point .
@@ -52,6 +52,31 @@ OPERATIONAL RULES:
 """
 
 # Index schema for Redis Vector Search
+# SCHEMA = {
+#     "index": {
+#         "name": INDEX_NAME,
+#         "prefix": "chunk",
+#         "storage_type": "hash"
+#     },
+#     "fields": [
+#         {"name": "chunk_id", "type": "tag", "attrs": {"sortable": True}},
+#         {"name": "document_id", "type": "tag", "attrs": {"sortable": True}},
+
+#         {"name": "content", "type": "text"},
+#         {
+#             "name": "text_embedding",
+#             "type": "vector",
+#             "attrs": {
+#                 "dims" : 384,
+#                 # "dims": 768,
+#                 "distance_metric": "cosine",
+#                 "algorithm": "hnsw",
+#                 "datatype": "float32"
+#             }
+#         }
+#     ]
+# }
+# Updated Index schema for Redis Vector Search with Metadata
 SCHEMA = {
     "index": {
         "name": INDEX_NAME,
@@ -61,14 +86,20 @@ SCHEMA = {
     "fields": [
         {"name": "chunk_id", "type": "tag", "attrs": {"sortable": True}},
         {"name": "document_id", "type": "tag", "attrs": {"sortable": True}},
-
         {"name": "content", "type": "text"},
+        
+        # NEW METADATA FIELDS:
+        {"name": "topic", "type": "tag", "attrs": {"sortable": True}},           # For filtering by topic
+        {"name": "keywords", "type": "text"},                                     # For text search
+        {"name": "question_type", "type": "tag", "attrs": {"sortable": True}},   # For filtering by type
+        {"name": "question", "type": "text"},                                     # For display
+        {"name": "source_file", "type": "tag", "attrs": {"sortable": True}},     # For tracking
+        
         {
             "name": "text_embedding",
             "type": "vector",
             "attrs": {
-                # "dims" : 384,
-                "dims": 768,
+                "dims": 384,
                 "distance_metric": "cosine",
                 "algorithm": "hnsw",
                 "datatype": "float32"
@@ -76,7 +107,6 @@ SCHEMA = {
         }
     ]
 }
-
 # Global references (set during initialization)
 _vectorizer = None
 _async_index = None
@@ -117,11 +147,6 @@ def _import_index():
     return SearchIndex, AsyncSearchIndex, VectorQuery, array_to_buffer
 
 
-def _import_anthropic():
-    import anthropic
-    return anthropic
-
-
 # =============================================================================
 # Redis Connection
 # =============================================================================
@@ -160,10 +185,9 @@ def load_and_split_document(doc_path: str, chunk_size: int = 600, chunk_overlap:
     print(f"✓ Created {len(chunks)} chunks from: {doc_path}")
     return chunks
 
-def load_and_split_docx(doc_path: str, chunk_size: int = 1000, chunk_overlap: int = 200):
+def load_and_split_docx(doc_path: str, chunk_size: int = 400, chunk_overlap: int = 100):
     """Load DOCX and split into chunks."""
     RecursiveCharacterTextSplitter = _import_split_text()
-    
     # Import docx library
     try:
         from docx import Document
@@ -182,7 +206,165 @@ def load_and_split_docx(doc_path: str, chunk_size: int = 1000, chunk_overlap: in
     chunks = text_splitter.create_documents([text])
     print(f"✓ Created {len(chunks)} chunks from: {doc_path}")
     return chunks
+    
 
+def load_and_split_docx_new(doc_path: str):
+    """
+    Load DOCX and split into FAQ chunks with metadata.
+    
+    Metadata includes:
+    - topic: Section/category name
+    - keywords: Auto-extracted important terms
+    - question_type: Type of question (how-to, definition, etc.)
+    - question: Original question text
+    - source_file: Document filename
+    - chunk_id: Unique identifier
+    """
+    
+    
+    
+    from docx import Document as DocxDocument
+    from langchain_core.documents import Document as LangchainDocument
+    
+    doc = DocxDocument(doc_path)
+
+    faqs = []
+    current_topic = "General"  # Default topic
+    current_question = None
+    current_answer = []
+
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+
+        # Detect topic headings (Heading styles or ALL CAPS text)
+        if para.style.name.startswith('Heading2') or text.isupper() or para.style.name.startswith('Heading 1'):
+            current_topic = text
+            print(f"  → Topic detected: {current_topic}")
+            continue
+
+        # Question detection
+        if text.endswith("?"):
+            # Save previous FAQ
+            if current_question and current_answer:
+                answer_text = ' '.join(current_answer).strip()
+                
+                faqs.append(
+                    LangchainDocument(
+                        page_content=f"{current_question}\n{answer_text}",
+                        metadata={
+                            "topic": current_topic,
+                            "keywords": extract_keywords(current_question, answer_text),
+                            "question_type": classify_question_type(current_question),
+                            "question": current_question,
+                            "source_file": doc_path.split('/')[-1].split('\\')[-1],
+                            "chunk_id": f"faq_{len(faqs):04d}",
+                        }
+                    )
+                )
+
+            # Start new FAQ
+            current_question = text
+            current_answer = []
+
+        else:
+            current_answer.append(text)
+
+    # Save last FAQ
+    if current_question and current_answer:
+        answer_text = ' '.join(current_answer).strip()
+        faqs.append(
+            LangchainDocument(
+                page_content=f"{current_question}\n{answer_text}",
+                metadata={
+                    "topic": current_topic,
+                    "keywords": extract_keywords(current_question, answer_text),
+                    "question_type": classify_question_type(current_question),
+                    "question": current_question,
+                    "source_file": doc_path.split('/')[-1].split('\\')[-1],
+                    "chunk_id": f"faq_{len(faqs):04d}",
+                }
+            )
+        )
+
+    # Print summary
+    topics = set(faq.metadata['topic'] for faq in faqs)
+    print(f"\n✓ Created {len(faqs)} FAQ chunks from: {doc_path}")
+    print(f"✓ Topics found: {', '.join(topics)}")
+    print(f"✓ Question types: {', '.join(set(faq.metadata['question_type'] for faq in faqs))}")
+    
+    return faqs
+
+
+def extract_keywords(question: str, answer: str) -> list:
+    import re
+    """Extract important keywords from question and answer."""
+    # Combine question and answer
+    text = f"{question} {answer}".lower()
+    
+    # Common stopwords to exclude
+    stopwords = {
+        'is', 'the', 'a', 'an', 'in', 'to', 'of', 'for', 'on', 'with',
+        'what', 'how', 'can', 'will', 'i', 'you', 'be', 'do', 'does',
+        'are', 'at', 'by', 'from', 'or', 'as', 'this', 'that', 'it',
+        'have', 'has', 'not', 'but', 'if', 'when', 'which', 'we', 'they'
+    }
+    
+    # Extract words (2+ chars, keep acronyms like API, KRA, BSDA)
+    words = re.findall(r'\b[A-Za-z0-9]{2,}\b', text)
+    
+    # Filter stopwords and deduplicate while preserving order
+    seen = set()
+    keywords = []
+    for word in words:
+        word_lower = word.lower()
+        if word_lower not in stopwords and word_lower not in seen:
+            keywords.append(word)
+            seen.add(word_lower)
+    
+    # Return top 10 keywords
+    return keywords[:10]
+
+
+def classify_question_type(question: str) -> str:
+    """Classify the type of question for better retrieval."""
+    q_lower = question.lower()
+    
+    # How-to questions
+    if any(phrase in q_lower for phrase in ['how to', 'how can', 'how do', 'how should']):
+        return 'how-to'
+    
+    # Definition questions
+    if any(phrase in q_lower for phrase in ['what is', 'what are', 'what does', 'define']):
+        return 'definition'
+    
+    # Temporal questions
+    if any(word in q_lower for word in ['when', 'what time', 'how long', 'duration']):
+        return 'temporal'
+    
+    # Location questions
+    if any(word in q_lower for word in ['where', 'which location']):
+        return 'location'
+    
+    # Explanation questions
+    if any(word in q_lower for word in ['why', 'reason', 'explain']):
+        return 'explanation'
+    
+    # Permission/capability questions
+    if any(phrase in q_lower for phrase in ['can i', 'is it possible', 'am i able', 'may i']):
+        return 'permission'
+    
+    # Comparison questions
+    if any(word in q_lower for word in ['or', 'versus', 'vs', 'difference between']):
+        return 'comparison'
+    
+    # Yes/No questions
+    if any(q_lower.startswith(word) for word in ['is ', 'are ', 'do ', 'does ', 'will ', 'can ']):
+        return 'yes-no'
+    
+    # Default
+    return 'general'
 
 def load_and_split_txt(doc_path: str, chunk_size: int = 1000, chunk_overlap: int = 200):
     """Load TXT file and split into chunks."""
@@ -264,39 +446,33 @@ def embed_chunks(vectorizer, chunks) -> list:
 # Index Management
 # =============================================================================
 
-def create_async_index(schema: dict, embed_cache=None, llm_cache=None):
+def create_async_index(schema: dict, llm_cache=None):
     
     # Surgical clears prevent "stale" cache hits
-    if llm_cache: llm_cache.clear()
-    #if embed_cache: embed_cache.clear()
+    if llm_cache: 
+        llm_cache.clear()
     
     
     """Create Redis search index from schema."""
     AsyncSearchIndex, _, _, _ = _import_index()
     index_name = schema["index"]["name"]
     index = AsyncSearchIndex.from_dict(schema, redis_url=REDIS_URL)
-    # index.create(overwrite=True, drop=True)
     
+    from redis import Redis
+    r = Redis.from_url(REDIS_URL)
     # 1️⃣ Check if index already exists
     try:
-        from redis import Redis
-        r = Redis.from_url(REDIS_URL)
-
         existing_indexes = r.execute_command("FT._LIST")
+        existing_indexes = [i.decode() for i in existing_indexes]
 
         if index_name in existing_indexes:
             print(f"✓ Index '{index_name}' already exists — returning existing")
             return index   # Just return the object without creating
     except Exception as e:
         print(f"Index existence check failed, attempting creation: {e}")
-        
-    try:
-        index.create()
-    except Exception as e:
-        # Handle cases where the index already exists (e.g., Redisearch error)
-        print(f"Index creation skipped/failed (likely already exists): {e}")
-        pass
-    print(f"✓ Async Index '{schema['index']['name']}' created")
+    
+    index.create()
+    print(f"✓ Async Index '{index_name}' created")
     return index
 
 
@@ -323,6 +499,73 @@ def load_data_to_index(index, chunks, embeddings) -> list:
     print(f"✓ Loaded {len(keys)} chunks into index")
     return keys
 
+def load_data_to_index_new(index, chunks, embeddings) -> list:
+    """Load embedded chunks with metadata into the Redis index."""
+    _, _, _, array_to_buffer = _import_index()
+    import hashlib
+    
+    data = []
+    skipped = 0
+    for i, chunk in enumerate(chunks):
+        # Handle both string chunks and Document objects
+        if isinstance(chunk, str):
+            content = chunk
+            metadata = {}  # No metadata for plain strings
+        else:
+            # Document object with page_content and metadata
+            content = chunk.page_content
+            metadata = chunk.metadata if hasattr(chunk, 'metadata') else {}
+        
+        # unique_id = str(uuid.uuid4())
+        # Generate content hash for deduplication
+        content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+        # Check if this content already exists
+        try:
+            existing = index.search(f"@chunk_id:{{{content_hash}}}")
+            if existing.total > 0:
+                skipped += 1
+                print(f"  ⊘ Skipped duplicate chunk (hash: {content_hash[:8]}...)")
+                continue
+        except Exception as e:
+            # Index might not exist yet or other error - continue loading
+            pass
+        # Base document
+        doc = {
+            # 'chunk_id': unique_id,
+            'chunk_id': content_hash,  # Use hash instead of UUID
+            'content': content,
+            'text_embedding': array_to_buffer(embeddings[i], dtype='float32')
+        }
+        
+        # Add metadata fields if available
+        if metadata:
+            doc['topic'] = metadata.get('topic', 'General')
+            doc['keywords'] = ','.join(metadata.get('keywords', []))  # Convert list to comma-separated string
+            doc['question_type'] = metadata.get('question_type', 'general')
+            doc['question'] = metadata.get('question', '')
+            doc['source_file'] = metadata.get('source_file', '')
+        else:
+            # Default values if no metadata
+            doc['topic'] = 'General'
+            doc['keywords'] = ''
+            doc['question_type'] = 'general'
+            doc['question'] = ''
+            doc['source_file'] = ''
+        
+        data.append(doc)
+    
+    # keys = index.load(data, id_field="chunk_id")
+    # print(f"✓ Loaded {len(keys)} chunks into index with metadata")
+    if data:
+        keys = index.load(data, id_field="chunk_id")
+        print(f"✓ Loaded {len(keys)} new chunks into index")
+    else:
+        keys = []
+        print(f"✓ No new chunks to load")
+    
+    if skipped > 0:
+        print(f"⊘ Skipped {skipped} duplicate chunks")
+    return keys
 
 # =============================================================================
 # Query Functions
@@ -350,7 +593,7 @@ def user_query_caching(hf):
 async def retrieve_context(
     async_index, 
     query_vector, 
-    retrieval_distance_threshold=0.3,
+    retrieval_distance_threshold=0.4,
     num_results=15
     ) -> str:
     """Fetch the relevant context from Redis using vector search."""
@@ -360,45 +603,222 @@ async def retrieve_context(
         VectorQuery(
             vector=query_vector,
             vector_field_name="text_embedding",
-            return_fields=["content"],
+            return_fields=["content", "vector_distance"],
             num_results=num_results
         )
     )
+    print(results)
 
     formatted_context_list = []
-    # for result in results:
-    #     distance_raw  = result.get("vector_distance")
-    #     content = result.get("content", "")
-    #     #formatted_context_list.append(content)
+    for result in results:
+        distance_raw  = result.get("vector_distance")
+        content = result.get("content", "")
         
-    #     if distance is not None and distance <= retrieval_distance_threshold:
-    #         formatted_context_list.append(content)
-    #         print(f"  ✓ Chunk (distance={distance:.3f})")
-    #     else:
-    #         print(f"  ✗ Skipped (distance={distance:.3f} > {retrieval_distance_threshold})")
+        if distance_raw is not None : 
+            distance = float(distance_raw)
+            if distance <= retrieval_distance_threshold:
+                formatted_context_list.append(content)
+                print(f"  ✓ Chunk (distance={distance:.3f})")
+            else :
+                print(f"  ✗ Skipped (distance={distance:.3f} > {retrieval_distance_threshold})")
+        else:
+            print(f"  ✗ Skipped (distance={distance_raw:.3f} > {retrieval_distance_threshold})")
+
+    return "\n\n".join(formatted_context_list)
+
+from typing import Optional
+async def retrieve_context_new(
+    async_index, 
+    query_vector, 
+    query_text: str = "",  # NEW: Original query text for metadata filtering
+    retrieval_distance_threshold: float = 0.4,
+    num_results: int = 15,
+    filter_by_topic: Optional[str] = None,  # NEW: Optional topic filter
+    filter_by_question_type: Optional[str] = None,  # NEW: Optional question type filter
+    use_metadata_boosting: bool = True,  # NEW: Boost results based on metadata match
+) -> str:
+    """
+    Fetch relevant context from Redis using vector search with metadata-enhanced ranking.
+    
+    Args:
+        async_index: Redis vector index
+        query_vector: Query embedding vector
+        query_text: Original query text (for metadata matching)
+        retrieval_distance_threshold: Max vector distance to include results
+        num_results: Number of results to retrieve
+        filter_by_topic: Filter results by specific topic (e.g., "ACCOUNT OPENING")
+        filter_by_question_type: Filter by question type (e.g., "how-to")
+        use_metadata_boosting: Whether to boost scores based on metadata match
+    
+    Returns:
+        Formatted context string with relevant FAQs
+    """
+    
+    _, _, VectorQuery, _ = _import_index()
+    
+    # Updated return fields to include metadata
+    return_fields = [
+        "content", 
+        "vector_distance",
+        "topic",           # NEW
+        "keywords",        # NEW
+        "question_type",   # NEW
+        "question",        # NEW
+        "chunk_id"         # NEW
+    ]
+    
+    results = async_index.query(
+        VectorQuery(
+            vector=query_vector,
+            vector_field_name="text_embedding",
+            return_fields=return_fields,
+            num_results=num_results
+        )
+    )
+    
+    print(f"\n{'='*60}")
+    print(f"RETRIEVAL RESULTS for query: '{query_text}'")
+    print(f"{'='*60}")
+    
+    # Process and rank results with metadata
+    enhanced_results = []
     
     for idx, result in enumerate(results, 1):
         distance_raw = result.get("vector_distance")
         content = result.get("content", "")
+        topic = result.get("topic", "")
+        keywords = result.get("keywords", "")
+        question_type = result.get("question_type", "")
+        question = result.get("question", "")
+        chunk_id = result.get("chunk_id", "")
         
-        # Convert distance to float if it's a string
+        # Validate distance
         try:
             if distance_raw is None:
                 print(f"  ⚠ Chunk #{idx}: No distance found, skipping")
                 continue
             distance = float(distance_raw)
         except (ValueError, TypeError) as e:
-            print(f"  ⚠ Chunk #{idx}: Invalid distance value '{distance_raw}' ({type(distance_raw).__name__}), skipping")
+            print(f"  ⚠ Chunk #{idx}: Invalid distance '{distance_raw}', skipping")
             continue
         
-        if content : #distance <= retrieval_distance_threshold:
-            formatted_context_list.append(content)
-            print(f"  ✓ Chunk (distance={distance:.3f})")
+        # Apply topic filter if specified
+        if filter_by_topic and topic != filter_by_topic:
+            print(f"  ✗ Chunk #{idx}: Topic mismatch ('{topic}' != '{filter_by_topic}')")
+            continue
+        
+        # Apply question type filter if specified
+        if filter_by_question_type and question_type != filter_by_question_type:
+            print(f"  ✗ Chunk #{idx}: Question type mismatch ('{question_type}' != '{filter_by_question_type}')")
+            continue
+        
+        # Calculate metadata boost score
+        metadata_score = 0.0
+        if use_metadata_boosting and query_text:
+            metadata_score = calculate_metadata_boost(
+                query_text, 
+                topic, 
+                keywords, 
+                question_type,
+                question
+            )
+        
+        # Adjusted score: lower is better (distance - boost)
+        adjusted_distance = distance - metadata_score
+        
+        enhanced_results.append({
+            "content": content,
+            "distance": distance,
+            "adjusted_distance": adjusted_distance,
+            "topic": topic,
+            "keywords": keywords,
+            "question_type": question_type,
+            "question": question,
+            "chunk_id": chunk_id,
+            "metadata_score": metadata_score
+        })
+        
+        print(f"  • Chunk #{idx} [{chunk_id}]")
+        print(f"    Distance: {distance:.3f} | Adjusted: {adjusted_distance:.3f} | Boost: +{metadata_score:.3f}")
+        print(f"    Topic: {topic} | Type: {question_type}")
+        print(f"    Question: {question[:80]}...")
+    
+    # Sort by adjusted distance (lower is better)
+    enhanced_results.sort(key=lambda x: x["adjusted_distance"])
+    
+    # Filter by threshold and format
+    formatted_context_list = []
+    print(f"\n{'='*60}")
+    print(f"FILTERED RESULTS (threshold={retrieval_distance_threshold})")
+    print(f"{'='*60}")
+    
+    for idx, result in enumerate(enhanced_results, 1):
+        if result["adjusted_distance"] <= retrieval_distance_threshold:
+            formatted_context_list.append(result["content"])
+            print(f"  ✓ [{result['chunk_id']}] {result['question'][:60]}...")
+            print(f"    Distance: {result['distance']:.3f} → {result['adjusted_distance']:.3f} | Topic: {result['topic']}")
         else:
-            print(f"  ✗ Skipped #{idx} (distance={distance:.3f} > {retrieval_distance_threshold})")
-
+            print(f"  ✗ [{result['chunk_id']}] Skipped (distance={result['adjusted_distance']:.3f} > {retrieval_distance_threshold})")
+    
+    print(f"\n✓ Selected {len(formatted_context_list)} / {len(enhanced_results)} results")
+    print(f"{'='*60}\n")
+    
     return "\n\n".join(formatted_context_list)
 
+
+def calculate_metadata_boost(
+    query: str, 
+    topic: str, 
+    keywords: str, 
+    question_type: str,
+    question: str
+) -> float:
+    """
+    Calculate a boost score based on metadata matching.
+    Higher score = better match = lower adjusted distance.
+    
+    Returns: Float between 0.0 and 0.15 (significant but not overwhelming)
+    """
+    boost = 0.0
+    query_lower = query.lower()
+    
+    # Keywords matching (most important) - up to 0.08 boost
+    if keywords:
+        keyword_list = [k.lower() for k in keywords.split(',') if k]
+        matching_keywords = sum(1 for kw in keyword_list if kw in query_lower)
+        if matching_keywords > 0:
+            boost += min(matching_keywords * 0.02, 0.08)
+    
+    # Topic matching - 0.04 boost
+    if topic and topic.lower() in query_lower:
+        boost += 0.04
+    
+    # Question type matching - 0.03 boost
+    if question_type:
+        type_indicators = {
+            'how-to': ['how to', 'how can', 'how do'],
+            'definition': ['what is', 'what are', 'define'],
+            'temporal': ['when', 'how long'],
+            'explanation': ['why', 'reason'],
+            'permission': ['can i', 'is it possible'],
+        }
+        
+        if question_type in type_indicators:
+            if any(indicator in query_lower for indicator in type_indicators[question_type]):
+                boost += 0.03
+                
+    # NEW: Direct question similarity boost - up to 0.05
+    if question:
+        question_lower = question.lower()
+        # Check if query words appear in the stored question
+        query_words = set(query_lower.split())
+        question_words = set(question_lower.split())
+        common_words = query_words & question_words
+        
+        if len(common_words) > 2:  # At least 3 words match
+            boost += 0.05
+    
+    return min(boost, 0.15)  # Cap at 0.15 to avoid over-boosting
 
 # =============================================================================
 # LLM Response Generation
@@ -426,19 +846,59 @@ def promptify(query: str, context: str, domain: str = "general") -> str:
     '''
 
 
+
+
+async def refine_with_slm(user_question, context_chunks):
+    import requests
+    # Default to localhost for local testing
+    OLLAMA_URL = "http://localhost:11434"
+    """
+    Takes a list of RAG strings and uses local Qwen to refine them.
+    """
+    print("--- Sending to Local SLM ---")
+    
+    
+    # 1. Format the chunks into a single text block
+    # formatted_context = "\n\n".join([f"Source {i+1}: {chunk}" for i, chunk in enumerate(context_chunks)])
+    final_prompt = promptify(user_question, context_chunks) # Example of promptify logic
+    print(f"final_prompt : {final_prompt}")
+    
+    # 2. Construct the Payload
+    payload = {
+        "model": "qwen2.5:1.5b",  # Must match the model you pulled
+        "messages": [
+            {
+                "role": "system", 
+                "content": "You are a helpful assistant. Use ONLY the provided Sources to answer. If the answer is not in the Sources, say 'I don't know'."
+            },
+            {
+                "role": "user", 
+                "content": f"{final_prompt}"
+            }
+        ],
+        "stream": False,
+        "temperature": 0.1 # Low temp = more factual
+    }
+
+    # 3. Send to Ollama
+    try:
+        response = requests.post(f"{OLLAMA_URL}/api/chat", json=payload)
+        
+        if response.status_code == 200:
+            result = response.json()
+            answer = result['message']['content']
+            print(f"--- SLM Answer: {answer} ---")
+            return answer
+        else:
+            print(f"Error: {response.text}")
+            return "Sorry, I had trouble processing that."
+            
+    except Exception as e:
+        print(f"Connection Error: {e}")
+        return "System is currently offline."
+
 async def generate_llm_response(query: str, context: str) -> str:
     """Send prompt to Anthropic LLM and return response."""
-    # anthropic = _import_anthropic()
-    
-    # client = anthropic.AsyncAnthropic(api_key=api_key)
-    # response = await client.messages.create(
-    #     model=CHAT_MODEL,
-    #     max_tokens=2048,
-    #     system=SYSTEM_PROMPT,
-    #     messages=[{"role": "user", "content": promptify(query, context)}],
-    #     temperature=0.6,
-    # )
-    # return response.content[0].text
     from google import genai
     from google.genai import types
     gemini = genai
@@ -469,7 +929,7 @@ async def generate_llm_response(query: str, context: str) -> str:
 
 
 
-async def answer_question(index, query: str , cache, use_cache=True, use_llm=True) -> str:
+async def answer_question_old(index, query: str , cache, use_cache=True, use_llm=True) -> str:
     """End-to-end RAG: embeds query, retrieves context, generates LLM response."""
     query_vector = embed_query(query)
     results = []
@@ -481,15 +941,125 @@ async def answer_question(index, query: str , cache, use_cache=True, use_llm=Tru
         print("found similar, semantic")
         return results[0]['response']
 
-    context = await retrieve_context(index, query_vector)
+    context = await retrieve_context_new(index, query_vector, query)
 
     if not use_llm : 
         return context
     llmResults = await generate_llm_response(query, context)
+    # llmResults = await refine_with_slm(query, context)
     cache.store(query, llmResults, query_vector)
     return llmResults
 
 
+def translate_py(text : str , source_lang : str = "en" , target_lang : str = "en") :
+    from translatepy import Translator
+    try : 
+        # Initialize translator
+        translator = Translator()
+        print(f"🔄 Translating from {source_lang} to {target_lang}")
+        result = translator.translate(text, target_lang, source_lang)
+        final_text = result.result
+        print(f"✅ Translated: {final_text}")
+        return final_text
+    except Exception as trans_error:
+        print(f"⚠️ Translation failed, using original text: {trans_error}")
+        final_text = text
+        return final_text
+    
+from deep_translator import GoogleTranslator
+# Initialize outside to reuse the connection session
+def translate_google(text: str, source_lang: str = "auto", target_lang: str = "en"):
+    print(f"🔄 Translating {text[:20]}... from {source_lang} to {target_lang}")
+    try:
+        # 'auto' is better for the source if you aren't 100% sure it's English
+        translator = GoogleTranslator(source=source_lang, target=target_lang)
+        final_text = translator.translate(text)
+        
+        if not final_text:
+            return text
+            
+        print(f"✅ Translated: {final_text}")
+        return final_text
+    except Exception as trans_error:
+        print(f"⚠️ Translation failed: {trans_error}")
+        return text
+    
+async def answer_question(
+    index, 
+    query: str,
+    cache, 
+    use_cache=True, 
+    use_llm=True,
+    original_query: str = None,
+    source_lang: str = "en",
+    translate_rag: bool = False  # NEW
+):
+    """End-to-end RAG: embeds query, retrieves context, generates LLM response."""
+    query_vector = embed_query(query)
+    results = []
+    
+    if use_cache:
+        results = cache.check(vector=query_vector)
+    
+    if results:
+        print("✅ Found in cache")
+        cached_response = results[0]['response']
+        
+        # If cached and needs translation
+        if source_lang != "en" and (use_llm or translate_rag):
+            if use_llm and original_query:
+                # Translate cached response to source language
+                translated = translate_google(cached_response, "en", source_lang)
+                if translate_rag:
+                    return {
+                        'answer': translated,
+                        'original_rag_context': cached_response,
+                        'translated_rag_context': translated
+                    }
+                return translated
+            elif translate_rag:
+                translated = translate_google(cached_response, "en", source_lang)
+                return {
+                    'answer': translated,
+                    'original_rag_context': cached_response,
+                    'translated_rag_context': translated
+                }
+        return cached_response
+
+    # Retrieve context from RAG
+    context = await retrieve_context_new(index, query_vector, query)
+
+    # If NOT using LLM, return RAG context (optionally translated)
+    if not use_llm:
+        if source_lang != "en" and translate_rag:
+            translated_context = translate_google(context, "en", source_lang)
+            return {
+                'answer': translated_context,
+                'original_rag_context': context,
+                'translated_rag_context': translated_context
+            }
+        # elif source_lang != "en":
+        #     # Translate only the answer
+        #     return translate_google(context, "en", source_lang)
+        return context
+
+    if original_query : 
+        llmResults = await generate_llm_response(original_query, context)
+        cache.store(original_query, llmResults, embed_query(query))
+    else : 
+        llmResults = await generate_llm_response(query, context)
+        cache.store(query, llmResults, query_vector)
+    
+    # Return with RAG context if requested
+    if translate_rag and source_lang != "en":
+        translated_context = translate_google(context, "en", source_lang)
+        return {
+            'answer': llmResults,
+            'original_rag_context': context,
+            'translated_rag_context': translated_context
+        }
+    
+    return llmResults
 # =============================================================================
 # Initialization
 # =============================================================================
@@ -507,6 +1077,7 @@ def initialize(doc_path: str = DOC_PATH):
     get_redis_connection()
 
     # 2. Load document
+    #chunks = load_and_split_docx_new(doc_path)
     chunks = load_and_split_document(doc_path)
 
     # 3. Create vectorizer
@@ -528,7 +1099,8 @@ def initialize(doc_path: str = DOC_PATH):
         embed_cache=embed_cache, 
         llm_cache=llmCache
     )
-    load_data_to_index(async_index, chunks, embeddings)
+    load_data_to_index_new(async_index, chunks, embeddings)
+    #load_data_to_index()
 
     print("=" * 50)
     print("✓ RAG System Ready!")
@@ -544,14 +1116,38 @@ def ensure_api_key():
     print(f"Using model: {CHAT_MODEL}")
 
 
-async def run_test_questions(async_index, questions: list , cache):
-    """Run test questions through the RAG system."""
-    results = await asyncio.gather(*[
-        answer_question(async_index, q , cache) for q in questions
-    ])
+# async def run_test_questions(async_index, questions: list , cache):
+#     """Run test questions through the RAG system."""
+#     results = await asyncio.gather(*[
+#         answer_question(async_index, q , cache) for q in questions
+#     ])
+#     #questions.append("बोनस शेयर्स कैसे और कहां दिखते हैं", "आईपीओ के लिए आवेदन कैसे करें", "मुझे लॉगिन क्रेडेंशियल कब मिलेंगे?")
+#     for i, result in enumerate(results):
+#         print(f"\nQ: {questions[i]}")
+#         print(f"A: {result}")
+#         print("-" * 50)
+async def run_test_questions(async_index, test_cases: list, cache):
+    """Run test questions through the RAG system with varying parameters."""
+    
+    tasks = []
+    for tc in test_cases:
+        if isinstance(tc, str):
+            # Simple case: only the query string is provided
+            tasks.append(answer_question(async_index, tc, cache))
+        elif isinstance(tc, dict):
+            # Complex case: Dictionary contains 'query' and other flags
+            # We pop 'query' to pass it positionally, then unpack the rest
+            query = tc.pop('query')
+            tasks.append(answer_question(async_index, query, cache, **tc))
+
+    results = await asyncio.gather(*tasks)
 
     for i, result in enumerate(results):
-        print(f"\nQ: {questions[i]}")
+        # Determine what to print as the question header
+        current_case = test_cases[i]
+        q_text = current_case if isinstance(current_case, str) else current_case.get('original_query', "Query")
+        
+        print(f"\nQ: {q_text}")
         print(f"A: {result}")
         print("-" * 50)
 
@@ -568,11 +1164,36 @@ def main():
     #ensure_api_key()
 
     # Initialize (lazy loading happens here)
-    async_index,llmCache = initialize("resources/Questionnaire_for_Improving_Liquidity_in_Bond_Market.pdf")
+    #async_index,llmCache = initialize("resources/sharekhan_faqs_complete.docx")
+    async_index,llmCache = initialize("C:/Users/tanishka.kothari/Downloads/1769772850270.pdf")
     
     # Test
-    questions = ["In this project, list technologies utilized"]
-    asyncio.run(run_test_questions(async_index, questions , llmCache))
+    # questions = [
+    #     "Why are transferred funds not credited In the account?",
+    #     {
+    #         "query": translate_google("आईपीओ के लिए आवेदन कैसे करें", "hi"),
+    #         "original_query": "आईपीओ के लिए आवेदन कैसे करें",
+    #         "source_lang": "hi",
+    #         "translate_rag": True
+    #     },
+    #     {
+    #         "query": translate_google("मुझे लॉगिन क्रेडेंशियल कब मिलेंगे?", "hi"),
+    #         "original_query": "मुझे लॉगिन क्रेडेंशियल कब मिलेंगे?",
+    #         "source_lang": "hi"
+    #     },{
+    #         "query": translate_google("बोनस शेयर्स कैसे और कहां दिखते हैं", "hi"),
+    #         "original_query": "बोनस शेयर्स कैसे और कहां दिखते हैं",
+    #         "source_lang": "hi",
+    #         "translate_rag": True,
+    #         "use_llm": True
+    #     }
+    # ]
+    
+    questions = [
+        "Who can use this special window?"
+    ]
+
+    asyncio.run(run_test_questions(async_index, questions, llmCache))
 
 
 
