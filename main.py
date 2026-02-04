@@ -464,6 +464,7 @@ def create_async_index(schema: dict, llm_cache=None):
     try:
         existing_indexes = r.execute_command("FT._LIST")
         existing_indexes = [i.decode() for i in existing_indexes]
+        existing_indexes = [i.decode() for i in existing_indexes]
 
         if index_name in existing_indexes:
             print(f"✓ Index '{index_name}' already exists — returning existing")
